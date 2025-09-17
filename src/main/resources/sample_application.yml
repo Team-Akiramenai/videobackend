@@ -1,0 +1,58 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: backend
+
+  servlet:
+    multipart:
+      max-file-size: 1024MB # 1GB (in MB)
+      max-request-size: 1024MB # 1GB (in MB)
+
+  datasource:
+    #url: jdbc:postgresql://postgres/synaptic_learn
+    url: jdbc:postgresql://localhost:5432/jwt_security
+    username: username
+    password: password
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: create-only
+      #ddl-auto: create-drop
+    #show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+    database: postgresql
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+
+application:
+  default-values:
+    use-gpu: false
+    test-vtt-file: ${HOME}/SynapticLearn/media/subtitles/test.vtt
+
+    # All videos will be assumed to be of 16:9 aspect ratio
+    video-qualities:
+      #- 1080p
+      #- 720p
+      #- 480p
+      - 360p
+      #- 144p
+    default-storage-given: 1073741824 # 1GB (in bytes)
+    media:
+      picture-directory: ${HOME}/SynapticLearn/media/pictures
+      video-directory: ${HOME}/SynapticLearn/media/videos
+      subtitles-directory: ${HOME}/SynapticLearn/media/subtitles
+      whisper-cpp-cli-path: /home/twaha/cloned/whisper.cpp/build/bin/whisper-cli
+      whisper-cpp-model-path: /home/twaha/cloned/whisper.cpp/models/ggml-large-v3-turbo.bin
+    user-profile-picture-filename: default-user-logo.png
+  security:
+    password:
+      hashing-strength: 12
+    jwt:
+      secret-key: e3322630a42f21c02644f222d2fa5ab713272a35e78616cd1ec14fed58e46142
+      access-token-validity-duration: 300000 # 5 minutes in ms
+      refresh-token-validity-duration: 86400000 # 1 day in ms
+      https-only-cookie: false
