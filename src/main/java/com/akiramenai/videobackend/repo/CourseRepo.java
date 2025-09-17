@@ -10,6 +10,7 @@ import org.springframework.stereotype.Repository;
 import com.akiramenai.videobackend.model.Course;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -27,4 +28,6 @@ public interface CourseRepo extends JpaRepository<Course, UUID> {
   @Transactional
   @Query("UPDATE Course c SET c.isHidden = true WHERE c.instructorId = :userId")
   void hideCoursesByUserId(@Param("userId") UUID userId);
+
+  List<CourseIdInterface> findAllByInstructorIdAndIsHidden(UUID instructorId, Boolean isHidden);
 }

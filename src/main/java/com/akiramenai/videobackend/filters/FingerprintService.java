@@ -4,10 +4,13 @@ import com.akiramenai.videobackend.model.Fingerprint;
 import com.akiramenai.videobackend.model.Users;
 import com.akiramenai.videobackend.repo.CourseRepo;
 import com.akiramenai.videobackend.repo.FingerprintRepo;
+import com.akiramenai.videobackend.repo.CourseIdInterface;
 import com.akiramenai.videobackend.repo.UserRepo;
+import com.akiramenai.videobackend.service.MeiliService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -17,6 +20,7 @@ public class FingerprintService {
   private final FingerprintRepo fingerprintRepo;
   private final UserRepo userRepo;
   private final CourseRepo courseRepo;
+  private final MeiliService meiliService;
 
   /// `UNIQUE` -> Video whose fingerprint we don't have in the database. Considered original content.
   ///
@@ -31,10 +35,11 @@ public class FingerprintService {
 
   public FingerprintService(
       FingerprintRepo fingerprintRepo,
-      UserRepo userRepo, CourseRepo courseRepo) {
+      UserRepo userRepo, CourseRepo courseRepo, MeiliService meiliService) {
     this.fingerprintRepo = fingerprintRepo;
     this.userRepo = userRepo;
     this.courseRepo = courseRepo;
+    this.meiliService = meiliService;
   }
 
   private FingerprintMatchStatus findMatchingFingerprint(String providedFingerprint, UUID currentUserId) {
@@ -56,8 +61,10 @@ public class FingerprintService {
 
     thief.get().setShadowBanned(true);
     userRepo.save(thief.get());
-
     courseRepo.hideCoursesByUserId(thief.get().getId());
+    List<CourseIdInterface> stolenCourseIds = courseRepo.findAllByInstructorIdAndIsHidden(currentUserId, true);
+    meiliService.deleteCourseInDocument(stolenCourseIds);
+
     return FingerprintMatchStatus.STOLEN;
   }
 

@@ -31,6 +31,9 @@ dependencies {
 
     implementation("io.swagger.core.v3:swagger-annotations:2.2.32")
 
+    implementation("com.meilisearch.sdk:meilisearch-java:0.15.0")
+    implementation("org.json:json:20250107")
+
     compileOnly("org.projectlombok:lombok")
     runtimeOnly("org.postgresql:postgresql")
 
