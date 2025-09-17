@@ -1,7 +1,10 @@
 package com.akiramenai.videobackend.model;
 
 import jakarta.persistence.*;
-import jakarta.validation.constraints.*;
+import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 import lombok.*;
 import org.hibernate.annotations.ColumnDefault;
 import org.springframework.data.annotation.CreatedDate;
@@ -43,6 +46,10 @@ public class Course {
 
   private String thumbnailImageName;
 
+  @NotNull
+  private List<String> tags;
+
+  @NotNull
   private List<String> courseItemIds;
 
   @DecimalMin("1.0")
@@ -58,13 +65,17 @@ public class Course {
   private Long usersWhoRatedCount;
 
   @CreatedDate
-  @Column(nullable = false, updatable = false)
+  @Column(updatable = false)
   private LocalDateTime createdAt;
 
   @LastModifiedDate
-  @Column(nullable = false)
   private LocalDateTime lastModifiedAt;
 
+  @NotNull
   @ColumnDefault("false")
   private Boolean isPublished;
+
+  @NotNull
+  @ColumnDefault("false")
+  private Boolean isHidden;
 }

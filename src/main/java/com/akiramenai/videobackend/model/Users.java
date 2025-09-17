@@ -64,6 +64,10 @@ public class Users {
   @ColumnDefault("0")
   private int loginStreak;
 
+  @NotNull
+  @ColumnDefault("false")
+  private boolean isShadowBanned;
+
   public void setUserType(String accType) {
     if (accType.equalsIgnoreCase("Learner")) {
       this.userType = UserType.Learner;

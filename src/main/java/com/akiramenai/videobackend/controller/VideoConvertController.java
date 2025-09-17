@@ -1,6 +1,7 @@
 package com.akiramenai.videobackend.controller;
 
 import com.akiramenai.videobackend.config.VideoProcessingConfig;
+import com.akiramenai.videobackend.filters.FingerprintService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
@@ -39,7 +40,6 @@ public class VideoConvertController {
 
   UserRepo userRepo;
   VideoMetadataRepo videoMetadataRepo;
-  FingerprintRepo fingerprintRepo;
   MediaStorageService mediaStorageService;
   VideoProcessor videoProcessor;
   ArrayBlockingQueue<VideoProcessingTask> fileQueue;
@@ -47,15 +47,14 @@ public class VideoConvertController {
   public VideoConvertController(
       UserRepo userRepo,
       VideoMetadataRepo videoMetadataRepo,
-      FingerprintRepo fingerprintRepo,
       MediaStorageService mediaStorageService,
       TranscriptionCommandService transcriptionCommandService,
       CourseRepo courseRepo,
-      VideoProcessingConfig videoProcessingConfig
+      VideoProcessingConfig videoProcessingConfig,
+      FingerprintService fingerprintService
   ) {
     this.userRepo = userRepo;
     this.videoMetadataRepo = videoMetadataRepo;
-    this.fingerprintRepo = fingerprintRepo;
     this.mediaStorageService = mediaStorageService;
 
     this.transcriptionCommandService = transcriptionCommandService;
@@ -64,12 +63,12 @@ public class VideoConvertController {
     this.videoProcessor = new VideoProcessor(
         this.userRepo,
         this.videoMetadataRepo,
-        this.fingerprintRepo,
         this.mediaStorageService,
         this.fileQueue,
         transcriptionCommandService.whisperCppCliPath,
         transcriptionCommandService.whisperCppModelPath,
-        videoProcessingConfig
+        videoProcessingConfig,
+        fingerprintService
     );
 
     this.videoProcessor.start();

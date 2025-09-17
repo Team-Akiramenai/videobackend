@@ -1,10 +1,10 @@
 package com.akiramenai.videobackend.utility;
 
 import com.akiramenai.videobackend.config.VideoProcessingConfig;
+import com.akiramenai.videobackend.filters.FingerprintService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.OptimisticLockingFailureException;
 import com.akiramenai.videobackend.model.*;
-import com.akiramenai.videobackend.repo.FingerprintRepo;
 import com.akiramenai.videobackend.repo.UserRepo;
 import com.akiramenai.videobackend.repo.VideoMetadataRepo;
 import com.akiramenai.videobackend.service.MediaStorageService;
@@ -15,23 +15,19 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
 
 @Slf4j
 public class VideoProcessor {
-  public enum ProcessingError {
-    FailedToProcess,
-    FailedToCreateOutputFile,
-  }
-
   String whisperCppCliPath;
   String whisperCppModelPath;
 
   private final UserRepo userRepo;
   private final VideoMetadataRepo videoMetadataRepo;
-  private final FingerprintRepo fingerprintRepo;
+  private final FingerprintService fingerprintService;
   private final MediaStorageService mediaStorageService;
   private final BlockingQueue<VideoProcessingTask> videoFileQueue;
 
@@ -40,16 +36,15 @@ public class VideoProcessor {
   public VideoProcessor(
       UserRepo userRepo,
       VideoMetadataRepo videoMetadataRepo,
-      FingerprintRepo fingerprintRepo,
       MediaStorageService mediaStorageService,
       BlockingQueue<VideoProcessingTask> videoFileQueue,
       String whisperCppCliPath,
       String whisperCppModelPath,
-      VideoProcessingConfig videoProcessingConfig
+      VideoProcessingConfig videoProcessingConfig,
+      FingerprintService fingerprintService
   ) {
     this.userRepo = userRepo;
     this.videoMetadataRepo = videoMetadataRepo;
-    this.fingerprintRepo = fingerprintRepo;
     this.mediaStorageService = mediaStorageService;
     this.videoFileQueue = videoFileQueue;
 
@@ -57,16 +52,17 @@ public class VideoProcessor {
     this.whisperCppModelPath = whisperCppModelPath;
 
     this.videoProcessingConfig = videoProcessingConfig;
+    this.fingerprintService = fingerprintService;
   }
 
-  private ResultOrError<File, ProcessingError> processVideo(
+  private ResultOrError<File, VideoProcessingErrors> processVideo(
       File videoToProcess,
       UUID videoId,
       int width,
       int height,
       boolean useGpu
   ) {
-    var res = ResultOrError.<File, ProcessingError>builder();
+    var res = ResultOrError.<File, VideoProcessingErrors>builder();
 
     Optional<File> encodedVideoFile = mediaStorageService.getNewFile(
         String.format("%s-%dp", videoId.toString(), height),
@@ -74,7 +70,7 @@ public class VideoProcessor {
     );
     if (encodedVideoFile.isEmpty()) {
       return res
-          .errorType(ProcessingError.FailedToCreateOutputFile)
+          .errorType(VideoProcessingErrors.FailedToCreateOutputFile)
           .errorMessage("Failed to create the output file.")
           .build();
     }
@@ -114,7 +110,7 @@ public class VideoProcessor {
         log.error("Failed to process video. FFMPEG exited with exit code: {}", exitCode);
 
         return res
-            .errorType(ProcessingError.FailedToProcess)
+            .errorType(VideoProcessingErrors.FailedToProcess)
             .errorMessage("Failed to process video.")
             .build();
       }
@@ -122,7 +118,7 @@ public class VideoProcessor {
       log.error("Failed to run the command to process the video. Reason: ", e);
 
       return res
-          .errorType(ProcessingError.FailedToProcess)
+          .errorType(VideoProcessingErrors.FailedToProcess)
           .errorMessage("Failed to process video.")
           .build();
     }
@@ -133,11 +129,11 @@ public class VideoProcessor {
         .build();
   }
 
-  private ResultOrError<File, ProcessingError> extractTranscription(
+  private ResultOrError<File, VideoProcessingErrors> extractVideoInfo(
       VideoProcessingTask task,
       boolean shouldTranscribe
   ) {
-    var res = ResultOrError.<File, ProcessingError>builder();
+    var res = ResultOrError.<File, VideoProcessingErrors>builder();
 
     File videoToProcess = task.videoToProcess();
     UUID videoId = task.videoId();
@@ -159,7 +155,7 @@ public class VideoProcessor {
         log.error("Failed to extract audio from video. FFMPEG exited with exit code: {}", exitCode);
 
         return res
-            .errorType(ProcessingError.FailedToProcess)
+            .errorType(VideoProcessingErrors.FailedToProcess)
             .errorMessage("Failed to extract 16-bit WAV from the video.")
             .build();
       }
@@ -167,7 +163,7 @@ public class VideoProcessor {
       Optional<File> vttFile = mediaStorageService.getNewFile(videoId + "_vtt", MediaStorageService.FileType.VTT);
       if (vttFile.isEmpty()) {
         return res
-            .errorType(ProcessingError.FailedToProcess)
+            .errorType(VideoProcessingErrors.FailedToProcess)
             .errorMessage("Failed to create the output VTT file.")
             .build();
       }
@@ -195,7 +191,7 @@ public class VideoProcessor {
           log.error("Failed to process video. Whisper-CLI exited with exit code: {}", exitCode);
 
           return res
-              .errorType(ProcessingError.FailedToProcess)
+              .errorType(VideoProcessingErrors.FailedToProcess)
               .errorMessage("Failed to extract 16-bit WAV from the video.")
               .build();
         }
@@ -203,7 +199,7 @@ public class VideoProcessor {
         Optional<File> transcriptionFile = mediaStorageService.getNewFile(videoId + "_temp", MediaStorageService.FileType.VTT);
         if (transcriptionFile.isEmpty()) {
           return res
-              .errorType(ProcessingError.FailedToProcess)
+              .errorType(VideoProcessingErrors.FailedToProcess)
               .errorMessage("Failed to create temporary transcription output file.")
               .build();
         }
@@ -219,16 +215,15 @@ public class VideoProcessor {
         if (!transcriptionFile.get().delete()) {
           log.warn("Failed to delete temporary transcription file: {}", transcriptionFile.get().getAbsolutePath());
         }
-      }
-      else {
+      } else {
         try {
           Path testVttFilePath = Paths.get(videoProcessingConfig.getTestVttFile());
-          Files.copy( testVttFilePath,vttFile.get().toPath(), StandardCopyOption.REPLACE_EXISTING);
+          Files.copy(testVttFilePath, vttFile.get().toPath(), StandardCopyOption.REPLACE_EXISTING);
         } catch (IOException e) {
           log.error("Failed to extract test VTT file from video. Reason: ", e);
 
           return res
-              .errorType(ProcessingError.FailedToProcess)
+              .errorType(VideoProcessingErrors.FailedToProcess)
               .errorMessage("Failed to copy the test VTT file into the output VTT file.")
               .build();
         }
@@ -236,13 +231,13 @@ public class VideoProcessor {
 
       File tempAudioFileHandle = Paths.get(mediaStorageService.videoDirectoryString, tempAudioFile).toFile();
 
-      ResultOrError<AudioFingerprint, ProcessingError> fingerprintResult = extractFingerprint(tempAudioFileHandle);
+      ResultOrError<AudioFingerprint, VideoProcessingErrors> fingerprintResult = extractFingerprint(tempAudioFileHandle);
       if (fingerprintResult.errorType() != null) {
         log.error("Failed to extract the audio fingerprint. Reason: {} -> {}", fingerprintResult.errorType(), fingerprintResult.errorMessage());
 
         return res
             .errorMessage("Failed to extract the audio fingerprint.")
-            .errorType(ProcessingError.FailedToProcess)
+            .errorType(VideoProcessingErrors.FailedToProcess)
             .build();
       }
       Fingerprint fingerprint = Fingerprint
@@ -252,7 +247,13 @@ public class VideoProcessor {
           .audioDuration(fingerprintResult.result().duration())
           .audioFingerprint(fingerprintResult.result().fingerprint())
           .build();
-      this.fingerprintRepo.save(fingerprint);
+      FingerprintService.FingerprintMatchStatus fprintStatus = this.fingerprintService.examineAndSaveFingerprint(fingerprint);
+      if (fprintStatus.equals(FingerprintService.FingerprintMatchStatus.ACCIDENTAL_REUPLOAD)) {
+        return res
+            .errorMessage("Rejecting the reupload of the same video.")
+            .errorType(VideoProcessingErrors.FailedToProcess)
+            .build();
+      }
 
       // Remove the temporarily created audio file used for transcription
       if (!tempAudioFileHandle.delete()) {
@@ -266,16 +267,16 @@ public class VideoProcessor {
       log.error("Failed to extract VTT file and fingerprint from the video. Reason: ", e);
 
       return res
-          .errorType(ProcessingError.FailedToProcess)
+          .errorType(VideoProcessingErrors.FailedToProcess)
           .errorMessage("Failed to extract VTT file and fingerprint from the video.")
           .build();
     }
   }
 
-  private ResultOrError<AudioFingerprint, ProcessingError> extractFingerprint(
+  private ResultOrError<AudioFingerprint, VideoProcessingErrors> extractFingerprint(
       File targetAudioFile
   ) {
-    var res = ResultOrError.<AudioFingerprint, ProcessingError>builder();
+    var res = ResultOrError.<AudioFingerprint, VideoProcessingErrors>builder();
 
     try {
       ProcessBuilder fpcalcCommand = new ProcessBuilder(
@@ -304,7 +305,7 @@ public class VideoProcessor {
         );
 
         return res
-            .errorType(ProcessingError.FailedToProcess)
+            .errorType(VideoProcessingErrors.FailedToProcess)
             .errorMessage("Failed to extract audio fingerprint.")
             .build();
       }
@@ -321,7 +322,7 @@ public class VideoProcessor {
       log.error("Failed to run the command to extract the audio fingerprint. Reason: ", e);
 
       return res
-          .errorType(ProcessingError.FailedToProcess)
+          .errorType(VideoProcessingErrors.FailedToProcess)
           .errorMessage("Failed to extract audio fingerprint.")
           .build();
     }
@@ -336,7 +337,7 @@ public class VideoProcessor {
           VideoProcessingTask task = videoFileQueue.take();
 
           ArrayList<File> encodedVideoFiles = new ArrayList<>();
-          ResultOrError<File, ProcessingError> processedResult = null;
+          ResultOrError<File, VideoProcessingErrors> processedResult = null;
           var videoDimensions = videoProcessingConfig.getVideoDimensions();
           for (int[] dimension : videoDimensions) {
             processedResult = processVideo(
@@ -356,7 +357,7 @@ public class VideoProcessor {
             continue;
           }
 
-          ResultOrError<File, ProcessingError> transcriptionResult = extractTranscription(task, videoProcessingConfig.useGpu());
+          ResultOrError<File, VideoProcessingErrors> transcriptionResult = extractVideoInfo(task, videoProcessingConfig.useGpu());
           if (transcriptionResult.errorType() != null) {
             log.error("Failed to process the video. Reason: {} -> {}", transcriptionResult.errorType(), transcriptionResult.errorMessage());
             continue;
