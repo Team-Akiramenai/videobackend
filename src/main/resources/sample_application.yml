@@ -29,6 +29,8 @@ spring:
     database-platform: org.hibernate.dialect.PostgreSQLDialect
 
 application:
+  meili-search:
+    master-key: <<REPLACE-ME>>
   default-values:
     use-gpu: false
     test-vtt-file: ${HOME}/SynapticLearn/media/subtitles/test.vtt
