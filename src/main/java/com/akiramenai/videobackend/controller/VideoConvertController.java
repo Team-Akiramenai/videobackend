@@ -30,11 +30,12 @@ import java.util.concurrent.ArrayBlockingQueue;
 @RestController
 @RequestMapping("/api/private/video")
 public class VideoConvertController {
-  private final CourseRepo courseRepo;
   JsonSerializer jsonSerializer = new JsonSerializer();
   HttpResponseWriter httpResponseWriter = new HttpResponseWriter();
 
-  VideoProcessingConfig videoProcessingConfig;
+  private final CourseRepo courseRepo;
+
+  private final VideoProcessingConfig videoProcessingConfig;
 
   TranscriptionCommandService transcriptionCommandService;
 
@@ -112,8 +113,9 @@ public class VideoConvertController {
     long videoSize = uploadedVideo.getSize();
     long storageLeft = targetUser.get().getTotalStorageInBytes() - targetUser.get().getUsedStorageInBytes();
 
-    // We'll create 3 video files -> 1080p, 720p, 480p. That's why we multiply it by 3 to get the upperbound size.
-    if ((videoSize * 3) > storageLeft) {
+    // Depending on the configured video quality count. We multiply it to get the upperbound size.
+    int videoQualityCount = this.videoProcessingConfig.getVideoQualities().size();
+    if ((videoSize * videoQualityCount) > storageLeft) {
       httpResponseWriter.writeFailedResponse(response, "Failed to upload the video. You don't have enough free storage.", HttpStatus.INSUFFICIENT_STORAGE);
       return;
     }
