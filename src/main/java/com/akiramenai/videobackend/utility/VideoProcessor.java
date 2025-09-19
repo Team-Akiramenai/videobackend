@@ -160,6 +160,29 @@ public class VideoProcessor {
             .build();
       }
 
+      File tempAudioFileHandle = Paths.get(mediaStorageService.videoDirectoryString, tempAudioFile).toFile();
+
+      ResultOrError<AudioFingerprint, VideoProcessingErrors> fingerprintResult = extractFingerprint(tempAudioFileHandle);
+      if (fingerprintResult.errorType() != null) {
+        log.error("Failed to extract the audio fingerprint. Reason: {} -> {}", fingerprintResult.errorType(), fingerprintResult.errorMessage());
+
+        return res
+            .errorMessage("Failed to extract the audio fingerprint.")
+            .errorType(VideoProcessingErrors.FailedToProcess)
+            .build();
+      }
+      Fingerprint fingerprint = Fingerprint
+          .builder()
+          .videoMetadataId("VM_" + videoId)
+          .authorId(task.uploader())
+          .audioDuration(fingerprintResult.result().duration())
+          .audioFingerprint(fingerprintResult.result().fingerprint())
+          .build();
+      FingerprintService.FingerprintMatchStatus fprintStatus = this.fingerprintService.examineAndSaveFingerprint(fingerprint);
+      if (fprintStatus.equals(FingerprintService.FingerprintMatchStatus.ACCIDENTAL_REUPLOAD)) {
+        log.warn("It seems instructor has accidentally reuploaded an already uploaded video.");
+      }
+
       Optional<File> vttFile = mediaStorageService.getNewFile(videoId + "_vtt", MediaStorageService.FileType.VTT);
       if (vttFile.isEmpty()) {
         return res
@@ -227,32 +250,6 @@ public class VideoProcessor {
               .errorMessage("Failed to copy the test VTT file into the output VTT file.")
               .build();
         }
-      }
-
-      File tempAudioFileHandle = Paths.get(mediaStorageService.videoDirectoryString, tempAudioFile).toFile();
-
-      ResultOrError<AudioFingerprint, VideoProcessingErrors> fingerprintResult = extractFingerprint(tempAudioFileHandle);
-      if (fingerprintResult.errorType() != null) {
-        log.error("Failed to extract the audio fingerprint. Reason: {} -> {}", fingerprintResult.errorType(), fingerprintResult.errorMessage());
-
-        return res
-            .errorMessage("Failed to extract the audio fingerprint.")
-            .errorType(VideoProcessingErrors.FailedToProcess)
-            .build();
-      }
-      Fingerprint fingerprint = Fingerprint
-          .builder()
-          .videoMetadataId("VM_" + videoId)
-          .authorId(task.uploader())
-          .audioDuration(fingerprintResult.result().duration())
-          .audioFingerprint(fingerprintResult.result().fingerprint())
-          .build();
-      FingerprintService.FingerprintMatchStatus fprintStatus = this.fingerprintService.examineAndSaveFingerprint(fingerprint);
-      if (fprintStatus.equals(FingerprintService.FingerprintMatchStatus.ACCIDENTAL_REUPLOAD)) {
-        return res
-            .errorMessage("Rejecting the reupload of the same video.")
-            .errorType(VideoProcessingErrors.FailedToProcess)
-            .build();
       }
 
       // Remove the temporarily created audio file used for transcription
