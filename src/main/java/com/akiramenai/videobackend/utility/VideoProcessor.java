@@ -3,6 +3,7 @@ package com.akiramenai.videobackend.utility;
 import com.akiramenai.videobackend.config.VideoProcessingConfig;
 import com.akiramenai.videobackend.filters.FingerprintService;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.io.FileUtils;
 import org.springframework.dao.OptimisticLockingFailureException;
 import com.akiramenai.videobackend.model.*;
 import com.akiramenai.videobackend.repo.UserRepo;
@@ -14,6 +15,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.text.MessageFormat;
 import java.util.ArrayList;
 import java.util.Objects;
 import java.util.Optional;
@@ -55,6 +57,42 @@ public class VideoProcessor {
     this.fingerprintService = fingerprintService;
   }
 
+  private boolean writeToFile(File fileToWriteTo, String content) {
+    try (
+        FileWriter fileWriter = new FileWriter(fileToWriteTo);
+        BufferedWriter bufferedWriter = new BufferedWriter(fileWriter)
+    ) {
+      bufferedWriter.write(content);
+    } catch (Exception e) {
+      log.error("Failed to write `subs.m3u8` file into the VideoIdDirectory. Reason: ", e);
+
+      return false;
+    }
+
+    return true;
+  }
+
+  private String[] getVideoQualityDetails(String videoHeight) {
+    switch (videoHeight) {
+      case "1080" -> {
+        return new String[]{"5000k", "5350k", "7500k"};
+        //return "-b:v 5000k -maxrate 5350k -bufsize 7500k";
+      }
+      case "720" -> {
+        return new String[]{"2500k", "2675k", "3750k"};
+      }
+      case "480" -> {
+        return new String[]{"800k", "856k", "1200k"};
+      }
+      case "360" -> {
+        return new String[]{"400k", "428k", "600k"};
+      }
+      default -> {
+        return new String[]{"95k", "100k", "150k"};
+      }
+    }
+  }
+
   private ResultOrError<File, VideoProcessingErrors> processVideo(
       File videoToProcess,
       UUID videoId,
@@ -64,46 +102,68 @@ public class VideoProcessor {
   ) {
     var res = ResultOrError.<File, VideoProcessingErrors>builder();
 
-    Optional<File> encodedVideoFile = mediaStorageService.getNewFile(
-        String.format("%s-%dp", videoId.toString(), height),
-        MediaStorageService.FileType.MP4
+    // Create the video directory and the quality directory
+    Path qualityDirPath = Paths.get(
+        mediaStorageService.videoDirectoryString,
+        videoId.toString(),
+        "v" + height
     );
-    if (encodedVideoFile.isEmpty()) {
+
+    try {
+      Files.createDirectories(qualityDirPath);
+    } catch (Exception e) {
+      log.error("Error creating directory for video processing.", e);
       return res
           .errorType(VideoProcessingErrors.FailedToCreateOutputFile)
           .errorMessage("Failed to create the output file.")
           .build();
     }
+    Path videoIdDirectory = Paths.get(
+        mediaStorageService.videoDirectoryString,
+        videoId.toString()
+    );
 
     try {
-      ProcessBuilder pb;
+      String encoderToUse = null, presetToUse = null;
       if (useGpu) {
-        pb = new ProcessBuilder(
-            "ffmpeg",
-            "-y", // NOTE: Remove after dev
-            "-i", videoToProcess.getAbsolutePath(),
-            "-vf", "scale=" + width + ":" + height,
-            "-c:a", "copy",
-            "-c:v", "h264_nvenc",
-            "-preset", "medium",
-            encodedVideoFile.get().getAbsolutePath()
-        )
-            .redirectErrorStream(true)
-            .redirectOutput(ProcessBuilder.Redirect.INHERIT);
+        encoderToUse = "h264_nvenc";
+        presetToUse = "p6";
       } else {
-        pb = new ProcessBuilder(
-            "ffmpeg",
-            "-y", // NOTE: Remove after dev
-            "-i", videoToProcess.getAbsolutePath(),
-            "-vf", "scale=" + width + ":" + height,
-            "-c:a", "copy",
-            "-c:v", "libx264",
-            "-preset", "fast",
-            encodedVideoFile.get().getAbsolutePath()
-        )
-            .redirectErrorStream(true)
-            .redirectOutput(ProcessBuilder.Redirect.INHERIT);
+        encoderToUse = "libx264";
+        presetToUse = "medium";
       }
+
+      String[] properties = getVideoQualityDetails(String.valueOf(height));
+
+      String[] command = {
+          "ffmpeg",
+          "-i", videoToProcess.getAbsolutePath(),
+          "-c:v", encoderToUse,
+          "-preset", presetToUse,
+          "-profile:v", "main",
+          "-b:v", properties[0],
+          "-maxrate", properties[1],
+          "-bufsize", properties[2],
+          "-vf", "scale=-2:" + height,
+          "-c:a", "aac",
+          "-ac", "2",
+          "-b:a", "128k",
+          "-g", "48",
+          "-force_key_frames", "expr:gte(t,n_forced*2)",
+          "-fflags", "+genpts",
+          "-start_at_zero",
+          "-hls_time", "2",
+          "-hls_list_size", "0",
+          "-hls_segment_filename", MessageFormat.format("v{0}/seg_%03d.ts", height),
+          MessageFormat.format("v{0}/prog.m3u8", height)
+      };
+
+      ProcessBuilder pb = new ProcessBuilder(
+          command
+      )
+          .directory(videoIdDirectory.toFile())
+          .redirectErrorStream(true)
+          .redirectOutput(ProcessBuilder.Redirect.INHERIT);
       int exitCode = pb.start().waitFor();
 
       if (exitCode != 0) {
@@ -123,9 +183,9 @@ public class VideoProcessor {
           .build();
     }
 
-    log.info("Video processing completed successfully. Video path: {}", encodedVideoFile.get().getAbsolutePath());
+    log.info("Video processing completed successfully. Video path: {}", qualityDirPath);
     return res
-        .result(encodedVideoFile.get())
+        .result(qualityDirPath.toFile())
         .build();
   }
 
@@ -270,6 +330,68 @@ public class VideoProcessor {
     }
   }
 
+  private ResultOrError<String, VideoProcessingErrors> generateM3u8Files(
+      Path videoIdDir,
+      File vttFile
+  ) {
+    var res = ResultOrError.<String, VideoProcessingErrors>builder();
+    // get the VTT file in here
+    try {
+      Files.copy(vttFile.toPath(), videoIdDir.resolve("subtitle.vtt"));
+    } catch (Exception e) {
+      log.error("Failed to copy VTT file into the VideoIdDirectory. Reason: ", e);
+
+      return res
+          .errorType(VideoProcessingErrors.FailedToProcess)
+          .errorMessage("Failed to copy VTT file into the VideoIdDirectory.")
+          .build();
+    }
+    // generate the m3u8 file for the VTT file
+    Path m3u8ForVtt = videoIdDir.resolve("sub.m3u8");
+    String content =
+        """
+            #EXTM3U
+            #EXT-X-VERSION:3
+            #EXT-X-TARGETDURATION:9999
+            #EXT-X-MEDIA-SEQUENCE:0
+            #EXTINF:9999.0,
+            substitle.vtt
+            #EXT-X-ENDLIST
+            """;
+    boolean isWriteSuccessful = writeToFile(m3u8ForVtt.toFile(), content);
+    if (!isWriteSuccessful) {
+      log.error("Failed to write `sub.m3u8` file into the VideoIdDirectory.");
+
+      return res
+          .errorType(VideoProcessingErrors.FailedToProcess)
+          .errorMessage("Failed to write `sub.m3u8` file into the VideoIdDirectory.")
+          .build();
+    }
+
+    // generate the master VTT file according to the qualities we have
+
+    ArrayList<String> videoQualities = new ArrayList<>();
+    for (int[] dimensions : this.videoProcessingConfig.getVideoDimensions()) {
+      videoQualities.add(String.valueOf(dimensions[1]));
+    }
+    content = M3u8FileGenerator.getMasterM3u8FileContent(videoQualities);
+
+    Path pathToMasterM3u8File = videoIdDir.resolve("master.m3u8");
+    isWriteSuccessful = writeToFile(pathToMasterM3u8File.toFile(), content);
+    if (!isWriteSuccessful) {
+      log.error("Failed to write `master.m3u8` file into the VideoIdDirectory.");
+
+      return res
+          .errorType(VideoProcessingErrors.FailedToProcess)
+          .errorMessage("Failed to write `sub.m3u8` file into the VideoIdDirectory.")
+          .build();
+    }
+
+    return res
+        .result("")
+        .build();
+  }
+
   private ResultOrError<AudioFingerprint, VideoProcessingErrors> extractFingerprint(
       File targetAudioFile
   ) {
@@ -333,7 +455,6 @@ public class VideoProcessor {
         try {
           VideoProcessingTask task = videoFileQueue.take();
 
-          ArrayList<File> encodedVideoFiles = new ArrayList<>();
           ResultOrError<File, VideoProcessingErrors> processedResult = null;
           var videoDimensions = videoProcessingConfig.getVideoDimensions();
           for (int[] dimension : videoDimensions) {
@@ -347,7 +468,6 @@ public class VideoProcessor {
             if (processedResult.errorType() != null) {
               break;
             }
-            encodedVideoFiles.add(processedResult.result());
           }
           if (processedResult.errorType() != null) {
             log.error("Failed to process the video. Reason: {} -> {}", processedResult.errorType(), processedResult.errorMessage());
@@ -357,6 +477,19 @@ public class VideoProcessor {
           ResultOrError<File, VideoProcessingErrors> transcriptionResult = extractVideoInfo(task, videoProcessingConfig.useGpu());
           if (transcriptionResult.errorType() != null) {
             log.error("Failed to process the video. Reason: {} -> {}", transcriptionResult.errorType(), transcriptionResult.errorMessage());
+            continue;
+          }
+
+          Path videoIdDirectory = Paths.get(
+              mediaStorageService.videoDirectoryString,
+              task.videoId().toString()
+          );
+          ResultOrError<String, VideoProcessingErrors> result = generateM3u8Files(
+              videoIdDirectory,
+              transcriptionResult.result()
+          );
+          if (result.errorType() != null) {
+            log.error("Failed to generate m3u8 files. Reason: {} -> {}", result.errorType(), result.errorMessage());
             continue;
           }
 
@@ -379,11 +512,11 @@ public class VideoProcessor {
 
             continue;
           }
-          long usedStorageBytes = 0;
-          for (File encodedFile : encodedVideoFiles) {
-            usedStorageBytes += encodedFile.length();
-          }
-          targetUser.get().setUsedStorageInBytes(usedStorageBytes);
+
+          long bytesUsed = FileUtils.sizeOf(videoIdDirectory.toFile());
+          targetUser.get().setUsedStorageInBytes(
+              targetUser.get().getUsedStorageInBytes() + bytesUsed
+          );
           userRepo.save(targetUser.get());
 
           log.info("Video processed successfully. VideoId: {}", task.videoId());
