@@ -355,7 +355,7 @@ public class VideoProcessor {
             #EXT-X-TARGETDURATION:9999
             #EXT-X-MEDIA-SEQUENCE:0
             #EXTINF:9999.0,
-            substitle.vtt
+            subtitle.vtt
             #EXT-X-ENDLIST
             """;
     boolean isWriteSuccessful = writeToFile(m3u8ForVtt.toFile(), content);
